@@ -1,0 +1,412 @@
+/* ==========================================================================
+   Slug theme. dark, monospaced, hairline borders. everything is driven from
+   the token block; component rules only ever reference tokens.
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@200..1000&display=swap');
+
+/* --- reset ---------------------------------------------------------------- */
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
+::selection,body::selection{background:var(--muted-foreground);color:var(--background)}
+/* a light ring reads on every dark surface, but not on the amber controls, so
+   those override to the dark foreground to keep focus >=3:1 everywhere */
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.btn-remove:focus-visible,
+.btn-primary:focus-visible,
+.btn-icon-sm.tool-active:hover:focus-visible{outline-color:var(--primary-foreground)}
+
+/* --- tokens --------------------------------------------------------------- */
+
+:root{
+  color-scheme:dark;
+
+  /* palette */
+  --background:#0a0a0a;
+  --foreground:#fafafa;
+  --card:#171717;
+  /* one action colour: mask weave, brush ring, Remove, spinner and every other
+     active state all read this, so they cannot drift apart */
+  --primary:#54a2ff;
+  --primary-foreground:#12275a;
+  --muted:#262626;
+  --muted-foreground:#a1a1a1;
+  --border:#ffffff1a;
+  --ring:#d4d4d4;
+  --scrollbar-thumb:#383838;
+  --scrollbar-thumb-hover:#555;
+
+  /* mask overlay: a light wash plus two-tone diagonals, so the photo stays
+     visible underneath the way the ai editors keep it. the bright line reads
+     --primary so the mask and the UI share one colour */
+  --mask-base:rgb(255 255 255 / .22);
+  --mask-shade:rgb(10 34 80 / .85);
+
+  /* shape + depth - black shadows need far more alpha to read on #0a0a0a */
+  --radius:.45rem;
+  --shadow-xs:0 1px 2px 0 rgb(0 0 0 / .40);
+  --shadow-md:0 4px 14px -2px rgb(0 0 0 / .55),0 2px 6px -2px rgb(0 0 0 / .40);
+  --shadow-lg:0 16px 40px -8px rgb(0 0 0 / .70),0 6px 14px -4px rgb(0 0 0 / .45);
+
+  /* motion */
+  --motion-duration-fast:.18s;
+  --motion-duration-base:.22s;
+  --motion-ease-standard:cubic-bezier(.22,1,.36,1);
+
+  /* layout */
+  --font:"Nunito",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --header-h:52px;
+  --control-h:32px;
+  --dot-size:14px;
+
+  /* shared transitions */
+  --t-micro:transform var(--motion-duration-base) var(--motion-ease-standard),
+            background-color var(--motion-duration-base) var(--motion-ease-standard),
+            border-color var(--motion-duration-base) var(--motion-ease-standard),
+            color var(--motion-duration-base) var(--motion-ease-standard),
+            opacity var(--motion-duration-base) var(--motion-ease-standard),
+            box-shadow var(--motion-duration-base) var(--motion-ease-standard);
+}
+
+html,body{height:100%}
+body{
+  background:var(--background);
+  color:var(--foreground);
+  font-family:var(--font);
+  font-size:13px;
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  scrollbar-color:var(--scrollbar-thumb) transparent;
+  scrollbar-width:thin;
+}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);border:3px solid var(--background);border-radius:6px}
+::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-thumb-hover)}
+
+/* --- shell ---------------------------------------------------------------- */
+
+.app-container{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden}
+
+/* ==========================================================================
+   header
+   ========================================================================== */
+
+.app-header{
+  position:relative;z-index:100;flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  height:var(--header-h);padding:0 14px;
+  background:color-mix(in srgb,var(--background) 78%,transparent);
+  -webkit-backdrop-filter:blur(12px) saturate(1.6);
+  backdrop-filter:blur(12px) saturate(1.6);
+  border-bottom:1px dashed var(--border);
+  box-shadow:var(--shadow-xs);
+}
+
+.header-left{display:flex;align-items:center;gap:9px;z-index:1}
+
+/* the mark is a rounded square punched out of the foreground; hover lifts it
+   into the primary color */
+.brand-icon{
+  display:block;width:28px;height:28px;padding:4px;
+  border-radius:10px;
+  background:var(--foreground);color:var(--background);
+  box-shadow:0 1px 2px 0 rgb(0 0 0 / .18);
+  transition:var(--t-micro);
+}
+.header-left:hover .brand-icon{background:var(--primary);color:var(--primary-foreground)}
+
+.brand-text{
+  font-size:15px;font-weight:600;
+  letter-spacing:-.015em;
+  color:var(--foreground);
+  user-select:none;
+}
+
+.header-center{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center}
+
+.header-right{display:flex;align-items:center;gap:6px;z-index:1}
+
+/* segmented control, active segment filled with the foreground */
+.mode-toggle{
+  display:flex;align-items:center;gap:2px;
+  padding:2px;border:1px solid var(--border);border-radius:var(--radius);
+  background:color-mix(in srgb,var(--muted) 55%,transparent);
+}
+.btn-mode{
+  appearance:none;border:0;background:transparent;
+  color:var(--muted-foreground);
+  font:inherit;font-size:12px;font-weight:500;letter-spacing:.01em;
+  height:24px;padding:0 12px;
+  border-radius:calc(var(--radius) - 2px);
+  cursor:pointer;
+  transition:var(--t-micro);
+}
+.btn-mode:hover{color:var(--foreground)}
+.btn-mode.active{
+  background:var(--foreground);color:var(--background);
+  box-shadow:var(--shadow-xs);
+}
+
+/* ==========================================================================
+   buttons
+   ========================================================================== */
+
+.btn-icon,.btn-icon-sm{
+  display:inline-flex;align-items:center;justify-content:center;
+  font:inherit;color:var(--foreground);
+  background:transparent;border:1px solid transparent;
+  border-radius:var(--radius);
+  cursor:pointer;
+  transition:var(--t-micro);
+}
+
+.btn-icon{
+  gap:7px;height:var(--control-h);padding:0 10px;
+  font-size:12px;font-weight:500;
+  border-color:var(--border);
+}
+.btn-icon-sm{width:var(--control-h);height:var(--control-h);padding:0}
+
+.btn-icon:hover:not(:disabled),.btn-icon-sm:hover:not(:disabled){
+  background:color-mix(in srgb,var(--muted) 70%,transparent);
+  border-color:var(--border);
+}
+.btn-icon:active:not(:disabled),.btn-icon-sm:active:not(:disabled){transform:translateY(1px)}
+.btn-icon:disabled,.btn-icon-sm:disabled{opacity:.35;cursor:not-allowed}
+
+/* must follow the hover block above to win on equal specificity */
+.btn-icon-sm.tool-active{
+  background:var(--foreground);border-color:var(--foreground);color:var(--background);
+}
+.btn-icon-sm.tool-active:hover:not(:disabled){background:var(--primary);border-color:var(--primary);color:var(--primary-foreground)}
+
+.btn-remove{
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  height:var(--control-h);padding:0 10px;
+  font:inherit;font-size:12px;font-weight:500;letter-spacing:.01em;
+  color:var(--primary-foreground);background:var(--primary);
+  border:1px solid var(--primary);border-radius:var(--radius);
+  cursor:pointer;
+  box-shadow:0 1px 2px 0 color-mix(in srgb,var(--primary) 35%,transparent);
+  transition:var(--t-micro);
+}
+.btn-remove:hover:not(:disabled){
+  background:color-mix(in srgb,var(--primary) 88%,var(--foreground));
+  border-color:color-mix(in srgb,var(--primary) 88%,var(--foreground));
+}
+.btn-remove:active:not(:disabled){transform:translateY(1px)}
+.btn-remove:disabled{opacity:.35;cursor:not-allowed;box-shadow:none}
+
+.btn-zoom-label{
+  min-width:46px;height:24px;padding:0 6px;
+  font:inherit;font-size:12px;font-weight:500;
+  font-variant-numeric:tabular-nums;
+  color:var(--foreground);
+  background:transparent;border:1px solid transparent;border-radius:var(--radius);
+  cursor:pointer;
+  transition:var(--t-micro);
+}
+.btn-zoom-label:hover{color:var(--primary);background:color-mix(in srgb,var(--muted) 70%,transparent)}
+
+/* ==========================================================================
+   stage
+   ========================================================================== */
+
+.app-main{flex-grow:1;position:relative;overflow:hidden;background:var(--background)}
+
+/* dotted field, faded out top and bottom */
+.app-main::before{
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:0;
+  background-image:radial-gradient(color-mix(in oklab,var(--muted-foreground) 26%,transparent) 1px,transparent 1px);
+  background-size:var(--dot-size) var(--dot-size);
+  -webkit-mask-image:linear-gradient(to bottom,transparent,#000 6rem,#000 calc(100% - 6rem),transparent);
+  mask-image:linear-gradient(to bottom,transparent,#000 6rem,#000 calc(100% - 6rem),transparent);
+}
+
+.landing-prompt{position:absolute;inset:0;z-index:10;display:grid;place-items:center;cursor:pointer}
+/* the whole stage is the click target, so this is only a quiet hint - no box,
+   no tint, just the icon and label lifting on hover */
+.dropzone{
+  display:flex;flex-direction:column;align-items:center;gap:16px;
+  color:var(--muted-foreground);
+  transition:color var(--motion-duration-base) var(--motion-ease-standard);
+}
+.landing-prompt:hover .dropzone{color:var(--foreground)}
+.dropzone p{
+  font-size:14px;font-weight:500;letter-spacing:-.01em;
+}
+
+.canvas-container{position:absolute;inset:0;z-index:1;display:grid;place-items:center}
+.canvas-scroll{display:flex;justify-content:center;align-items:center;overflow:auto;width:100%;height:100%}
+.img-wrap{flex-shrink:0;padding:24px}
+.canvas-wrap{
+  display:inline-block;position:relative;
+  /* checkerboard so transparent sources read as transparent */
+  background-color:var(--background);
+  background-image:
+    linear-gradient(45deg,var(--muted) 25%,transparent 25%,transparent 75%,var(--muted) 75%),
+    linear-gradient(45deg,var(--muted) 25%,transparent 25%,transparent 75%,var(--muted) 75%);
+  background-size:16px 16px;
+  background-position:0 0,8px 8px;
+  box-shadow:var(--shadow-md),0 0 0 1px var(--border);
+}
+
+.canvas-layer{display:block;position:absolute;top:0;left:0;width:100%;height:100%}
+.canvas-image{position:relative}
+.canvas-mask{opacity:0;touch-action:none}
+.canvas-preview{pointer-events:none}
+.canvas-shape{pointer-events:none}
+
+.brush-cursor{
+  position:absolute;top:0;left:0;
+  display:none;transform:translate(-50%,-50%);
+  border-radius:50%;
+  border:1.5px solid var(--primary);
+  background:color-mix(in oklab,var(--primary) 12%,transparent);
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--background) 55%,transparent);
+  pointer-events:none;z-index:10;
+  /* the element is moved with transform only, so keep it off the layout path */
+  will-change:transform;
+}
+
+/* ==========================================================================
+   bottom toolbar
+   ========================================================================== */
+
+.toolbar-bottom{
+  position:relative;z-index:100;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  height:var(--header-h);padding:0 12px;
+  background:color-mix(in srgb,var(--background) 82%,transparent);
+  -webkit-backdrop-filter:blur(12px) saturate(1.6);
+  backdrop-filter:blur(12px) saturate(1.6);
+  border-top:1px dashed var(--border);
+  box-shadow:0 -1px 2px 0 rgb(0 0 0 / .5);
+}
+
+.toolbar-group{display:flex;align-items:center;gap:2px}
+.divider-v{width:1px;height:20px;background:var(--border);flex-shrink:0}
+
+.brush-size-group{gap:6px}
+.brush-label{
+  font-size:10px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted-foreground);white-space:nowrap;user-select:none;
+}
+
+.brush-slider{
+  -webkit-appearance:none;appearance:none;
+  width:84px;height:14px;background:transparent;outline:none;cursor:pointer;
+}
+.brush-slider::-webkit-slider-runnable-track{height:3px;border-radius:2px;background:var(--border)}
+.brush-slider::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;
+  width:12px;height:12px;margin-top:-4.5px;
+  border-radius:50%;background:var(--foreground);
+  border:2px solid var(--background);
+  box-shadow:0 0 0 1px var(--border);
+  transition:box-shadow var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.brush-slider:hover::-webkit-slider-thumb{box-shadow:0 0 0 1px var(--border),0 0 0 4px color-mix(in srgb,var(--muted) 90%,transparent)}
+.brush-slider:focus-visible{outline:none}
+.brush-slider:focus-visible::-webkit-slider-thumb{
+  box-shadow:0 0 0 1px var(--background),0 0 0 3px color-mix(in srgb,var(--primary) 32%,transparent);
+}
+.brush-slider::-moz-range-track{height:3px;border-radius:2px;background:var(--border)}
+.brush-slider::-moz-range-progress{height:3px;border-radius:2px;background:var(--foreground)}
+.brush-slider::-moz-range-thumb{
+  width:12px;height:12px;border-radius:50%;
+  background:var(--foreground);border:2px solid var(--background);
+  box-shadow:0 0 0 1px var(--border);
+}
+
+.brush-dot{
+  display:inline-block;width:10px;height:10px;
+  border-radius:50%;background:var(--foreground);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--muted) 80%,transparent);
+  flex-shrink:0;
+}
+
+.zoom-group{gap:0}
+
+/* ==========================================================================
+   overlays
+   ========================================================================== */
+
+/* busy state: the blur is the whole indicator, nothing is drawn on top */
+.spinner-overlay{
+  position:fixed;inset:0;z-index:300;
+  background:color-mix(in srgb,var(--background) 55%,transparent);
+  -webkit-backdrop-filter:blur(10px) saturate(1.1);
+  backdrop-filter:blur(10px) saturate(1.1);
+}
+
+/* a failed removal used to revert with no explanation; say what went wrong */
+.toast{
+  position:fixed;left:50%;bottom:calc(var(--header-h) + 20px);z-index:350;
+  transform:translateX(-50%);
+  max-width:min(520px,90vw);
+  padding:10px 16px;
+  border:1px solid var(--border);border-radius:var(--radius);
+  background:var(--card);
+  box-shadow:var(--shadow-md);
+}
+.toast-text{
+  display:block;
+  font-size:12px;line-height:1.5;
+  color:var(--foreground);
+  overflow-wrap:anywhere;
+}
+
+.confirm-overlay{
+  position:fixed;inset:0;z-index:400;
+  display:grid;place-items:center;
+  /* a black scrim is invisible on a near-black page, so dim with a light wash
+     plus blur and let the card's border and shadow carry the elevation */
+  background:rgb(250 250 250 / .07);
+  -webkit-backdrop-filter:blur(3px);
+  backdrop-filter:blur(3px);
+}
+.confirm-card{
+  width:min(400px,90vw);padding:24px;
+  border:1px dashed var(--border);border-radius:calc(var(--radius) * 2.2);
+  background:var(--card);
+  box-shadow:var(--shadow-lg);
+}
+.confirm-text{
+  font-size:14px;line-height:1.55;
+  color:var(--foreground);margin-bottom:18px;
+}
+.confirm-actions{display:flex;justify-content:flex-end;gap:8px}
+
+.btn-secondary,.btn-primary{
+  height:var(--control-h);padding:0 14px;
+  font:inherit;font-size:12px;font-weight:500;
+  border-radius:var(--radius);cursor:pointer;
+  transition:var(--t-micro);
+}
+.btn-secondary{background:transparent;border:1px solid var(--border);color:var(--foreground)}
+.btn-secondary:hover{background:color-mix(in srgb,var(--muted) 70%,transparent)}
+.btn-secondary:active,.btn-primary:active{transform:translateY(1px)}
+.btn-primary{background:var(--foreground);border:1px solid var(--foreground);color:var(--background)}
+.btn-primary:hover{background:var(--primary);border-color:var(--primary);color:var(--primary-foreground)}
+
+/* ==========================================================================
+   utilities
+   ========================================================================== */
+
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+@media(max-width:640px){
+  .header-center{display:none}
+  .btn-icon span{display:none}
+  .brush-slider{width:60px}
+  .toolbar-bottom{gap:4px;padding:0 8px}
+  .brush-label{letter-spacing:.04em}
+}
+
+@media(prefers-reduced-motion:reduce){
+  *{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
