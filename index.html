@@ -1,188 +1,163 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Slug</title>
-<link rel="icon" href="/favicon.ico">
-<link rel="stylesheet" href="/color.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="Remove watermarks and objects from images with MI-GAN and classical inpainting, running entirely in your browser.">
+  <title>Slug · Watermark remover</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/color.css">
+  <script type="module" src="/app/main.js"></script>
 </head>
 <body>
-<div class="app-container" id="app">
+  <!-- icon sprite, referenced with <use href="#i-name"> -->
+  <svg class="sprite" aria-hidden="true">
+    <symbol id="i-brush" viewBox="0 0 24 24"><path d="M19.4 3.6a1.9 1.9 0 0 1 2.7 2.7l-8.4 8.5-2.7-2.7z"/><path d="M10.2 13c-2.4-.6-4.7.9-4.7 3.5 0 1.4-.9 2.4-2.2 3 3.8 1.3 8.6.1 9-3.7"/></symbol>
+    <symbol id="i-rect" viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="1.5" stroke-dasharray="3 2.4"/></symbol>
+    <symbol id="i-ellipse" viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8.5" ry="6.5" stroke-dasharray="3 2.4"/></symbol>
+    <symbol id="i-zoom-out" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.4-4.4M8.5 11h5"/></symbol>
+    <symbol id="i-zoom-in" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.4-4.4M8.5 11h5M11 8.5v5"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6"/><path d="m6 7 .9 12.1A2 2 0 0 0 8.9 21h6.2a2 2 0 0 0 2-1.9L18 7"/><path d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="m10 3.5 1.6 4.5a2 2 0 0 0 1.2 1.2l4.5 1.6-4.5 1.6a2 2 0 0 0-1.2 1.2L10 18.1l-1.6-4.5a2 2 0 0 0-1.2-1.2l-4.5-1.6 4.5-1.6A2 2 0 0 0 8.4 8z"/><path d="M18.5 3v4M16.5 5h4M19 16v4M17 18h4"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="1.8"/><path d="m21 15.5-4.6-4.6a1.5 1.5 0 0 0-2.1 0L5.5 19.7"/></symbol>
+  </svg>
 
-  <header class="app-header">
-    <div class="header-left">
-      <svg class="brand-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-        <circle cx="12" cy="12" r="3"/>
-      </svg>
-      <span class="brand-text">Slug</span>
+  <header class="topbar">
+    <div class="brand">
+      <img src="/favicon.ico" alt="" width="24" height="24">
+      <span class="brand-name">Slug</span>
+      <span class="brand-tag">watermark remover</span>
     </div>
 
-    <div class="header-center">
-      <div class="mode-toggle" role="group" aria-label="Processing mode">
-        <button class="btn-mode active" type="button" data-mode="standard" title="Standard mode">Standard</button>
-        <button class="btn-mode" type="button" data-mode="pro" title="Pro mode">Pro</button>
-      </div>
+    <div class="mode-switch" role="group" aria-label="Removal mode">
+      <button type="button" class="btn-mode active" data-mode="standard" title="Instant. OpenCV Telea, PatchMatch or a harmonic fill">Standard</button>
+      <button type="button" class="btn-mode" data-mode="pro" title="Slower, better on texture. MI-GAN (~28MB model)">Pro</button>
     </div>
 
-    <div class="header-right">
-      <button class="btn-icon btn-close" id="closeBtn" type="button" title="Close loaded image" disabled>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M18 6 6 18"/>
-          <path d="m6 6 12 12"/>
-        </svg>
-        <span>Close</span>
+    <div class="topbar-actions">
+      <button type="button" class="btn btn-download" title="Download PNG" disabled>
+        <svg class="icon"><use href="#i-download"/></svg>
+        <span class="btn-label">Download</span>
       </button>
-      <button class="btn-icon btn-download" type="button" title="Download result" disabled>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="7 10 12 15 17 10"/>
-          <line x1="12" y1="15" x2="12" y2="3"/>
-        </svg>
-        <span>Download</span>
+      <button type="button" id="closeBtn" class="btn btn-icon btn-ghost" title="Close image" aria-label="Close image" disabled>
+        <svg class="icon"><use href="#i-close"/></svg>
       </button>
-
     </div>
   </header>
 
-  <main class="app-main" id="main">
+  <main class="stage">
+    <!-- covers the whole stage, so a click anywhere opens the picker -->
+    <button type="button" id="landing" class="landing">
+      <span class="landing-card">
+        <span class="landing-badge"><svg class="icon"><use href="#i-image"/></svg></span>
+        <span class="landing-title">Drop an image to start</span>
+        <span class="landing-sub">or click anywhere to browse</span>
+        <span class="landing-modes">
+          <span><b>Standard</b> is instant. <b>Pro</b> runs MI-GAN and handles texture better.</span>
+        </span>
+        <span class="landing-keys">
+          <span><kbd>B</kbd> brush</span>
+          <span><kbd>R</kbd> rectangle</span>
+          <span><kbd>E</kbd> ellipse</span>
+          <span><kbd>Ctrl</kbd><kbd>Z</kbd> undo</span>
+        </span>
+        <span class="landing-note">Runs entirely in your browser. Nothing is uploaded.</span>
+      </span>
+    </button>
 
-    <div class="landing-prompt" id="landing">
-      <div class="dropzone" id="dropzone">
-        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M21 12v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3"/>
-          <circle cx="12" cy="12" r="3"/>
-          <line x1="12" y1="2" x2="12" y2="12"/>
-        </svg>
-        <p>Drop an image here or click to Import</p>
-      </div>
-    </div>
-
-    <div class="canvas-container" id="canvasContainer" hidden>
-      <div class="canvas-scroll" id="canvasScroll">
-        <div class="img-wrap">
-          <div class="canvas-wrap">
-            <canvas class="canvas-layer canvas-image" id="imageCanvas"></canvas>
-            <canvas class="canvas-layer canvas-mask" id="maskCanvas"></canvas>
-            <canvas class="canvas-layer canvas-preview" id="previewCanvas"></canvas>
-            <canvas class="canvas-layer canvas-shape" id="shapeCanvas"></canvas>
-            <div class="brush-cursor" id="brushCursor"></div>
-          </div>
+    <div id="canvasContainer" class="canvas-container" hidden>
+      <div id="canvasScroll" class="canvas-scroll">
+        <div class="canvas-stack">
+          <canvas id="imageCanvas"></canvas>
+          <canvas id="previewCanvas" class="layer"></canvas>
+          <canvas id="shapeCanvas" class="layer"></canvas>
+          <canvas id="maskCanvas" class="layer layer-input"></canvas>
+          <div id="brushCursor" class="brush-cursor"></div>
         </div>
       </div>
     </div>
 
+    <div id="spinner" class="spinner-overlay" role="status" hidden>
+      <span class="spinner-pill">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Working…</span>
+      </span>
+    </div>
+
+    <div id="toast" class="toast" role="alert" hidden>
+      <span id="toastText"></span>
+    </div>
   </main>
 
-  <div class="toolbar-bottom" id="toolbarBottom" hidden>
-
-    <div class="toolbar-group">
-      <button class="btn-icon-sm" id="undoBtn" type="button" title="Undo (Ctrl+Z)" disabled>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <polyline points="3 7 3 12 8 12"/>
-          <path d="M21 17a9 9 0 0 0-15-6.7L3 12"/>
-        </svg>
+  <footer id="toolbarBottom" class="toolbar" hidden>
+    <div class="toolbar-group" role="group" aria-label="Selection tool">
+      <button type="button" class="btn btn-icon btn-ghost tool-active" data-tool="brush" title="Brush (B)" aria-label="Brush">
+        <svg class="icon"><use href="#i-brush"/></svg>
       </button>
-      <button class="btn-icon-sm" id="redoBtn" type="button" title="Redo (Ctrl+Shift+Z)" disabled>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <polyline points="21 7 21 12 16 12"/>
-          <path d="M3 17a9 9 0 0 1 15-6.7L21 12"/>
-        </svg>
+      <button type="button" class="btn btn-icon btn-ghost" data-tool="rect" title="Rectangle (R)" aria-label="Rectangle">
+        <svg class="icon"><use href="#i-rect"/></svg>
+      </button>
+      <button type="button" class="btn btn-icon btn-ghost" data-tool="ellipse" title="Ellipse (E)" aria-label="Ellipse">
+        <svg class="icon"><use href="#i-ellipse"/></svg>
       </button>
     </div>
 
-    <div class="divider-v"></div>
+    <span class="toolbar-sep" aria-hidden="true"></span>
 
-    <div class="toolbar-group">
-      <button class="btn-icon-sm tool-active" id="brushBtn" type="button" title="Brush (B)" data-tool="brush">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M18.37 2.63 14 7l-1.59-1.59a2 2 0 0 0-2.82 0L8 7l9 9 1.59-1.59a2 2 0 0 0 0-2.82L17 10l4.37-4.37a2 2 0 0 0 0-2.82l-.18-.18a2 2 0 0 0-2.82 0zM9 8l-5 5c-.55.55-.55 1.43 0 1.98l.28.28L3 17l1.5 1.5L8 16l.74.74c.55.55 1.43.55 1.98 0L14 12"/>
-        </svg>
+    <label class="brush-size" title="Brush size">
+      <span class="brush-preview" aria-hidden="true"><span id="brushDot" class="brush-dot"></span></span>
+      <span class="visually-hidden">Brush size</span>
+      <input type="range" id="brushSlider" min="4" max="160" step="1" value="24">
+    </label>
+
+    <span class="toolbar-sep" aria-hidden="true"></span>
+
+    <div class="toolbar-group" role="group" aria-label="Zoom">
+      <button type="button" id="zoomOutBtn" class="btn btn-icon btn-ghost" title="Zoom out" aria-label="Zoom out">
+        <svg class="icon"><use href="#i-zoom-out"/></svg>
       </button>
-      <button class="btn-icon-sm" id="rectBtn" type="button" title="Rectangle (R)" data-tool="rect">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-        </svg>
-      </button>
-      <button class="btn-icon-sm" id="ellipseBtn" type="button" title="Ellipse (E)" data-tool="ellipse">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="10"/>
-        </svg>
-      </button>
-    </div>
-
-    <div class="divider-v"></div>
-
-    <div class="toolbar-group brush-size-group">
-      <label class="brush-label" for="brushSlider">Size</label>
-      <input class="brush-slider" type="range" id="brushSlider" min="8" max="96" value="24" aria-label="Brush size">
-      <span class="brush-dot" id="brushDot"></span>
-    </div>
-
-    <div class="divider-v"></div>
-
-    <div class="toolbar-group">
-      <button class="btn-icon-sm" id="clearBtn" type="button" title="Clear mask" disabled>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="m15 15-6 6m0-6 6 6m5-12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>
-        </svg>
+      <button type="button" id="zoomLabel" class="zoom-label" title="Reset zoom">100%</button>
+      <button type="button" id="zoomInBtn" class="btn btn-icon btn-ghost" title="Zoom in" aria-label="Zoom in">
+        <svg class="icon"><use href="#i-zoom-in"/></svg>
       </button>
     </div>
 
-    <div class="divider-v"></div>
+    <span class="toolbar-sep" aria-hidden="true"></span>
 
-    <div class="toolbar-group">
-      <button class="btn-remove" id="removeBtn" type="button" title="Remove watermark" disabled>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
-        </svg>
-        <span>Remove</span>
+    <div class="toolbar-group" role="group" aria-label="History">
+      <button type="button" id="undoBtn" class="btn btn-icon btn-ghost" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>
+        <svg class="icon"><use href="#i-undo"/></svg>
+      </button>
+      <button type="button" id="redoBtn" class="btn btn-icon btn-ghost" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled>
+        <svg class="icon"><use href="#i-redo"/></svg>
+      </button>
+      <button type="button" id="clearBtn" class="btn btn-icon btn-ghost" title="Clear mask" aria-label="Clear mask" disabled>
+        <svg class="icon"><use href="#i-trash"/></svg>
       </button>
     </div>
 
-    <div class="divider-v"></div>
+    <button type="button" id="removeBtn" class="btn btn-primary btn-remove" disabled>
+      <svg class="icon"><use href="#i-sparkle"/></svg>
+      <span>Remove</span>
+    </button>
+  </footer>
 
-    <div class="toolbar-group zoom-group">
-      <button class="btn-icon-sm" id="zoomOutBtn" type="button" title="Zoom out">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="11" cy="11" r="8"/>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-          <line x1="8" y1="11" x2="14" y2="11"/>
-        </svg>
-      </button>
-      <button class="btn-zoom-label" id="zoomLabel" type="button" title="Reset zoom to 100%">100%</button>
-      <button class="btn-icon-sm" id="zoomInBtn" type="button" title="Zoom in">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="11" cy="11" r="8"/>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-          <line x1="11" y1="8" x2="11" y2="14"/>
-          <line x1="8" y1="11" x2="14" y2="11"/>
-        </svg>
-      </button>
-    </div>
+  <!-- outside #landing: a click bubbling from here would reopen the picker -->
+  <input type="file" id="fileInput" accept="image/*" hidden>
 
-  </div>
-
-  <input type="file" id="fileInput" class="sr-only" accept="image/*" aria-label="Choose an image file">
-
-  <div class="spinner-overlay" id="spinner" hidden></div>
-
-  <div class="toast" id="toast" role="status" hidden>
-    <span class="toast-text" id="toastText"></span>
-  </div>
-
-  <div class="confirm-overlay" id="confirmOverlay" hidden>
-    <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirmText" aria-describedby="confirmText">
-      <p class="confirm-text" id="confirmText">Unsaved changes will be lost.</p>
-      <div class="confirm-actions">
-        <button type="button" class="btn-secondary" id="confirmCancel">Cancel</button>
-        <button type="button" class="btn-primary" id="confirmOk">Import anyway</button>
+  <div id="confirmOverlay" class="overlay" hidden>
+    <div class="dialog" role="alertdialog" aria-modal="true" aria-label="Confirm" aria-describedby="confirmText">
+      <p id="confirmText" class="dialog-text"></p>
+      <div class="dialog-actions">
+        <button type="button" id="confirmCancel" class="btn">Cancel</button>
+        <button type="button" id="confirmOk" class="btn btn-primary">Continue</button>
       </div>
     </div>
   </div>
-
-</div>
-<script type="module" src="/app/main.js"></script>
 </body>
 </html>
