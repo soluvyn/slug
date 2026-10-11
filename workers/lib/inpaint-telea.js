@@ -1,51 +1,36 @@
-// opencv telea inpainting. fast on flat low-texture backgrounds, so it is
-// tried first on the standard path
+// opencv telea, the standard path. fast, smooth, best on flat backgrounds
 
-let cvReadyPromise;
+const VENDOR = new URL("../../vendor/", import.meta.url).href;
 
+let cvPromise = null;
 
-
-async function getCv() {
-  if (!cvReadyPromise) {
-    cvReadyPromise = import("/vendor/opencv.js").then((mod) =>
-      mod.init("/vendor/"),
-    );
-  }
-  const cv = await cvReadyPromise;
-  if (!cv) throw new Error("OpenCV init failed");
-  return cv;
+function loadCv() {
+  cvPromise ??= import(VENDOR + "opencv.js")
+    .then((mod) => mod.init(VENDOR))
+    .catch((err) => {
+      cvPromise = null;
+      throw err;
+    });
+  return cvPromise;
 }
 
-export async function tryOpenCvInpaint({ image, mask, width, height, radius }) {
+export async function teleaInpaint(image, hole, width, height, radius) {
+  const cv = await loadCv();
+  const mats = [];
+  const mat = (m) => (mats.push(m), m);
   try {
-    const cv = await getCv();
-    if (!cv || typeof cv.inpaint !== "function") return null;
-
-    const srcRgba = cv.matFromImageData(new ImageData(image, width, height));
-    const rgb = new cv.Mat();
-    cv.cvtColor(srcRgba, rgb, cv.COLOR_RGBA2RGB);
-    srcRgba.delete();
-
-    const maskMat = new cv.Mat(height, width, cv.CV_8UC1);
-    for (let i = 0, p = 0; i < mask.length; i += 4, p += 1) {
-      maskMat.data[p] = mask[i + 3] > 0 ? 255 : 0;
-    }
-
-    const dstRgb = new cv.Mat();
-    cv.inpaint(rgb, maskMat, dstRgb, radius, cv.INPAINT_TELEA);
-    rgb.delete();
-
-    const dstRgba = new cv.Mat();
-    cv.cvtColor(dstRgb, dstRgba, cv.COLOR_RGB2RGBA);
-    dstRgb.delete();
-
-    const out = new Uint8ClampedArray(dstRgba.data);
-
-    maskMat.delete();
-    dstRgba.delete();
-
-    return out;
-  } catch {
-    return null;
+    const rgba = mat(new cv.Mat(height, width, cv.CV_8UC4));
+    rgba.data.set(image);
+    const rgb = mat(new cv.Mat());
+    cv.cvtColor(rgba, rgb, cv.COLOR_RGBA2RGB);
+    // .data is a getter that builds a fresh view, so it is set in one go
+    const mask = mat(new cv.Mat(height, width, cv.CV_8UC1));
+    mask.data.set(hole);
+    const out = mat(new cv.Mat());
+    cv.inpaint(rgb, mask, out, radius, cv.INPAINT_TELEA);
+    cv.cvtColor(out, rgba, cv.COLOR_RGB2RGBA);
+    return new Uint8ClampedArray(rgba.data);
+  } finally {
+    for (const m of mats) m.delete();
   }
 }

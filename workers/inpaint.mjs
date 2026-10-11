@@ -1,223 +1,111 @@
-// message contract and fallback chain. the algorithms live in ./lib
+// jobs arrive as the full-res image and mask and go back as the patch that
+// changed. the fill runs on a copy no larger than MAX_EDGE, then is eased
+// back into the full-res original, so pixels away from the mask never move
+//   standard: opencv telea, or a harmonic fill if opencv will not load
+//   pro: mi-gan, in a nested worker
 
-// standard: telea -> (heuristic) patchmatch -> harmonic
-// pro: mi-gan
+import { alphaOf, bounds, dilate, featherWeights } from "./lib/mask.js";
+import { downscale, compose } from "./lib/blend.js";
+import { teleaInpaint } from "./lib/inpaint-telea.js";
+import { harmonicInpaint } from "./lib/inpaint-harmonic.js";
 
-import { hasAnyMask, computeMaskBounds } from "./lib/mask.js";
-import { blendNaturalEdgesRGBA, keepOriginalOutsideMaskRGBA } from "./lib/blend.js";
-import { tryOpenCvInpaint } from "./lib/inpaint-telea.js";
-import {
-  shouldUsePatchMatch,
-  patchMatchInpaintRGBA,
-} from "./lib/inpaint-patchmatch.js";
-import { harmonicInpaintRGBA } from "./lib/inpaint-harmonic.js";
+const MAX_EDGE = 2048;
+const MIGAN_TIMEOUT_MS = 60_000;
 
-let miganWorker = null;
+let migan = null;
+let callId = 0;
+const calls = new Map();
 
-function getMiganWorker() {
-  if (miganWorker) return miganWorker;
-  try {
-    miganWorker = new Worker("/workers/migan.js");
-    return miganWorker;
-  } catch (err) {
-    console.warn("[Worker] Failed to create MI-GAN worker:", err);
-    return null;
-  }
-}
-
-async function checkMiganReady() {
-  const worker = getMiganWorker();
-  if (!worker) return false;
-
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      console.warn("[Worker] MI-GAN readiness check timed out");
-      resolve(false);
-    }, 5000);
-
-    const handler = (e) => {
-      if (e.data.type === "check") {
-        clearTimeout(timeout);
-        worker.removeEventListener("message", handler);
-        resolve(e.data.ready);
-      }
+function callMigan(msg, transfer = [], timeoutMs = 0) {
+  if (!migan) {
+    migan = new Worker(new URL("./migan.js", import.meta.url));
+    migan.onmessage = ({ data }) => calls.get(data.id)?.(data);
+    migan.onerror = (e) => {
+      e.preventDefault();
+      resetMigan(e.message || "MI-GAN worker crashed");
     };
-
-    worker.addEventListener("message", handler);
-    worker.postMessage({ type: "check" });
+  }
+  return new Promise((resolve, reject) => {
+    const id = ++callId;
+    const timer = timeoutMs && setTimeout(() => resetMigan(`MI-GAN timed out after ${timeoutMs / 1000}s`), timeoutMs);
+    calls.set(id, (res) => {
+      calls.delete(id);
+      clearTimeout(timer);
+      res.ok ? resolve(res) : reject(new Error(res.error));
+    });
+    migan.postMessage({ ...msg, id }, transfer);
   });
 }
 
-// returns { data } on success or { error } on failure, so the reason reaches the
-// page instead of collapsing into a generic PRO_NOT_READY
-async function tryMiganInpaint({ image, mask, width, height }) {
+// a crashed or stuck worker is dropped whole, so a late reply can never land
+// on the next job. the next call spawns a fresh one
+function resetMigan(error) {
+  migan?.terminate();
+  migan = null;
+  for (const settle of calls.values()) settle({ ok: false, error });
+}
+
+async function fillPro(image, hole, w, h) {
+  // the first load is a ~28MB download, so only inference is timed
+  await callMigan({ type: "load" });
+  const copy = image.slice();
+  const res = await callMigan({ type: "inpaint", image: copy, hole, width: w, height: h }, [copy.buffer, hole.buffer], MIGAN_TIMEOUT_MS);
+  return res.image;
+}
+
+async function fillStandard(image, hole, w, h, radius) {
   try {
-    const ready = await checkMiganReady();
-    if (!ready) {
-      return { error: "MI-GAN model is not reachable" };
-    }
-
-    const worker = getMiganWorker();
-    if (!worker) {
-      return { error: "MI-GAN worker could not be created" };
-    }
-
-    return await new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        resolve({ error: "MI-GAN timed out after 60s" });
-      }, 60000);
-
-      const handler = (e) => {
-        if (e.data.type === "result") {
-          clearTimeout(timeout);
-          worker.removeEventListener("message", handler);
-          if (e.data.ok) {
-            resolve({ data: new Uint8ClampedArray(e.data.image) });
-          } else {
-            resolve({ error: e.data.error || "MI-GAN inference failed" });
-          }
-        }
-      };
-
-      worker.addEventListener("message", handler);
-      const imageCopy = new Uint8ClampedArray(image);
-      const maskCopy = new Uint8ClampedArray(mask);
-      worker.postMessage(
-        { type: "inpaint", image: imageCopy, mask: maskCopy, width, height },
-        [imageCopy.buffer, maskCopy.buffer],
-      );
-    });
+    // telea costs radius² per pixel and only blurs more past a few px: at the
+    // brush's 80 px it took over a minute
+    return await teleaInpaint(image, hole, w, h, Math.min(6, Math.max(3, Math.round(radius))));
   } catch (err) {
-    return { error: err && err.message ? err.message : String(err) };
+    console.warn("[inpaint] opencv unavailable, using harmonic fill:", err);
+    return harmonicInpaint(image, hole, w, h);
   }
 }
 
-function reply(message, buffer) {
-  self.postMessage(message, buffer ? [buffer] : []);
+async function run({ image, mask: rgbaMask, width, height, radius, quality }) {
+  const mask = alphaOf(rgbaMask);
+  const b = bounds(mask, width, height);
+  if (!b) return null;
+
+  // the fill eases into the original over this many px outside the mask
+  const feather = Math.min(26, Math.max(2, Math.round(radius * 0.3)));
+  const x = Math.max(0, b.x0 - feather - 1), y = Math.max(0, b.y0 - feather - 1);
+  const rect = {
+    x,
+    y,
+    w: Math.min(width - 1, b.x1 + feather + 1) - x + 1,
+    h: Math.min(height - 1, b.y1 + feather + 1) - y + 1,
+  };
+
+  const scale = Math.min(1, MAX_EDGE / width, MAX_EDGE / height);
+  const w = Math.max(1, Math.round(width * scale));
+  const h = Math.max(1, Math.round(height * scale));
+  const small = scale < 1;
+  const workImage = small ? downscale(image, width, height, w, h, 4) : image;
+  const workMask = small ? downscale(mask, width, height, w, h, 1) : mask;
+  // the feather ring is filled too, or there is nothing to ease into
+  const hole = dilate(workMask, w, h, Math.ceil(feather * scale) + 2);
+
+  const fill =
+    quality === "pro"
+      ? await fillPro(workImage, hole, w, h)
+      : await fillStandard(workImage, hole, w, h, radius * scale);
+  const weight = featherWeights(mask, width, rect, feather);
+  return { x, y, width: rect.w, height: rect.h, data: compose(image, width, height, fill, w, h, rect, weight) };
 }
 
-self.addEventListener("message", async (event) => {
-  const data = event.data;
-  if (!data || data.type !== "inpaint") return;
-
-  const requestId = data.requestId;
-  const width = data.width;
-  const height = data.height;
-  const radius = typeof data.radius === "number" ? data.radius : 3;
-  const quality = data.quality === "pro" ? "pro" : "standard";
-  const edgeFeatherPx =
-    typeof data.edgeFeatherPx === "number" ? data.edgeFeatherPx : undefined;
-  const image = data.image;
-  const mask = data.mask;
-
-  try {
-    if (!width || !height) throw new Error("Invalid image size");
-    if (!image || !mask) throw new Error("Missing image/mask data");
-
-    if (!hasAnyMask(mask)) {
-      const passthrough = new Uint8ClampedArray(image);
-      reply({ ok: true, image: passthrough, width, height, requestId, quality });
-      return;
-    }
-
-    if (quality === "pro") {
-      const attempt = await tryMiganInpaint({ image, mask, width, height });
-      if (!attempt.data) {
-        reply({
-          ok: false,
-          error: attempt.error || "PRO_NOT_READY",
-          requestId,
-        });
-        return;
-      }
-      const out = attempt.data;
-
-      keepOriginalOutsideMaskRGBA({ original: image, inpainted: out, mask });
-      const blended = blendNaturalEdgesRGBA({
-        original: image,
-        inpainted: out,
-        mask,
-        width,
-        height,
-        radius,
-        featherPx: edgeFeatherPx,
-      });
-      reply(
-        {
-          ok: true,
-          image: blended,
-          width,
-          height,
-          method: "migan",
-          quality: "pro",
-          requestId,
-        },
-        blended.buffer,
-      );
-      return;
-    }
-
-    const opencvOut = await tryOpenCvInpaint({
-      image,
-      mask,
-      width,
-      height,
-      radius,
-    });
-    if (opencvOut) {
-      const blended = blendNaturalEdgesRGBA({
-        original: image,
-        inpainted: opencvOut,
-        mask,
-        width,
-        height,
-        radius,
-        featherPx: edgeFeatherPx,
-      });
-      reply(
-        {
-          ok: true,
-          image: blended,
-          width,
-          height,
-          method: "opencv",
-          quality: "standard",
-          requestId,
-        },
-        blended.buffer,
-      );
-      return;
-    }
-
-    // hasAnyMask already guarantees bounds resolve
-    const bounds = computeMaskBounds(mask, width, height);
-    let out = null;
-    if (shouldUsePatchMatch({ image, mask, width, bounds, radius })) {
-      out = patchMatchInpaintRGBA({ image, mask, width, height, radius, bounds });
-    }
-    // patchmatch bails out (null) on oversized or textureless regions
-    if (!out) {
-      out = harmonicInpaintRGBA({ image, mask, width, height, radius, bounds });
-    }
-
-    const blended = blendNaturalEdgesRGBA({
-      original: image,
-      inpainted: out,
-      mask,
-      width,
-      height,
-      radius,
-      featherPx: edgeFeatherPx,
-    });
-    reply(
-      { ok: true, image: blended, width, height, quality: "standard", requestId },
-      blended.buffer,
-    );
-  } catch (err) {
-    reply({
-      ok: false,
-      error: err instanceof Error ? err.message : "Unknown error",
-      requestId,
-    });
+self.onmessage = async ({ data }) => {
+  if (data.type === "warmup") {
+    // errors resurface on the real job, which retries the load
+    callMigan({ type: "load" }).catch(() => {});
+    return;
   }
-});
+  try {
+    const patch = await run(data);
+    self.postMessage({ id: data.id, ok: true, patch }, patch ? [patch.data.buffer] : []);
+  } catch (err) {
+    self.postMessage({ id: data.id, ok: false, error: err?.message || String(err) });
+  }
+};

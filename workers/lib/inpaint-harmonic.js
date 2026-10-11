@@ -1,134 +1,96 @@
-// harmonic (laplace) fill, diffusing known pixels inward. the unconditional
-// fallback when telea and patchmatch are both unavailable
+// pure-js fallback for when opencv will not load: fill the hole ring by ring
+// from its edge inward, then smooth it towards a harmonic (laplace) fill
 
-import { clampInt } from "./util.js";
-import { computeMaskBounds } from "./mask.js";
+import { bounds } from "./mask.js";
 
-export function harmonicInpaintRGBA({ image, mask, width, height, radius, bounds }) {
-  const finalBounds = bounds ?? computeMaskBounds(mask, width, height);
-  if (!finalBounds) return new Uint8ClampedArray(image);
+const OMEGA = 1.8;
+const MAX_SWEEPS = 400;
 
-  const pad = clampInt(Math.floor(16 + radius * 10), 16, 128);
-  const x0 = clampInt(finalBounds.minX - pad, 0, width - 1);
-  const y0 = clampInt(finalBounds.minY - pad, 0, height - 1);
-  const x1 = clampInt(finalBounds.maxX + pad, 0, width - 1);
-  const y1 = clampInt(finalBounds.maxY + pad, 0, height - 1);
-
-  const rw = x1 - x0 + 1;
-  const rh = y1 - y0 + 1;
-  const regionPixels = rw * rh;
-
-  const regionMask = new Uint8Array(regionPixels);
-  const fixed = new Uint8Array(regionPixels);
-  const prev = new Float32Array(regionPixels * 3);
-
-  for (let ry = 0; ry < rh; ry += 1) {
-    const sy = y0 + ry;
-    for (let rx = 0; rx < rw; rx += 1) {
-      const sx = x0 + rx;
-      const srcI = (sy * width + sx) * 4;
-      const dstP = ry * rw + rx;
-      const dstI = dstP * 3;
-
-      const m = mask[srcI + 3] > 0 ? 1 : 0;
-      regionMask[dstP] = m;
-      fixed[dstP] = m ? 0 : 1;
-
-      prev[dstI] = image[srcI];
-      prev[dstI + 1] = image[srcI + 1];
-      prev[dstI + 2] = image[srcI + 2];
-    }
-  }
-
-  for (let ry = 0; ry < rh; ry += 1) {
-    for (let rx = 0; rx < rw; rx += 1) {
-      const p = ry * rw + rx;
-      if (!regionMask[p]) continue;
-
-      let sumR = 0;
-      let sumG = 0;
-      let sumB = 0;
-      let count = 0;
-
-      for (let oy = -1; oy <= 1; oy += 1) {
-        const ny = ry + oy;
-        if (ny < 0 || ny >= rh) continue;
-        for (let ox = -1; ox <= 1; ox += 1) {
-          const nx = rx + ox;
-          if (nx < 0 || nx >= rw) continue;
-          const np = ny * rw + nx;
-          if (!fixed[np]) continue;
-          const ni = np * 3;
-          sumR += prev[ni];
-          sumG += prev[ni + 1];
-          sumB += prev[ni + 2];
-          count += 1;
-        }
-      }
-
-      if (count > 0) {
-        const i = p * 3;
-        prev[i] = sumR / count;
-        prev[i + 1] = sumG / count;
-        prev[i + 2] = sumB / count;
-      }
-    }
-  }
-
-  const iter =
-    260 +
-    clampInt(Math.floor(Math.sqrt(regionPixels) * 10), 0, 1500) +
-    clampInt(Math.floor(radius * 70), 0, 1200);
-  const iterations = clampInt(iter, 400, 2600);
-  
-  const omega = 1.85;
-
-  for (let t = 0; t < iterations; t += 1) {
-    for (let ry = 0; ry < rh; ry += 1) {
-      const rowOffset = ry * rw;
-      for (let rx = 0; rx < rw; rx += 1) {
-        const p = rowOffset + rx;
-        const i = p * 3;
-
-        if (fixed[p]) continue;
-
-        const up = ry > 0 ? p - rw : p;
-        const down = ry < rh - 1 ? p + rw : p;
-        const left = rx > 0 ? p - 1 : p;
-        const right = rx < rw - 1 ? p + 1 : p;
-
-        const iu = up * 3;
-        const id = down * 3;
-        const il = left * 3;
-        const ir = right * 3;
-
-        const avgR = (prev[iu] + prev[id] + prev[il] + prev[ir]) * 0.25;
-        const avgG =
-          (prev[iu + 1] + prev[id + 1] + prev[il + 1] + prev[ir + 1]) * 0.25;
-        const avgB =
-          (prev[iu + 2] + prev[id + 2] + prev[il + 2] + prev[ir + 2]) * 0.25;
-
-        prev[i] = prev[i] + (avgR - prev[i]) * omega;
-        prev[i + 1] = prev[i + 1] + (avgG - prev[i + 1]) * omega;
-        prev[i + 2] = prev[i + 2] + (avgB - prev[i + 2]) * omega;
-      }
-    }
-  }
-
+export function harmonicInpaint(image, hole, width, height, budgetMs = 1500) {
   const out = new Uint8ClampedArray(image);
-  for (let ry = 0; ry < rh; ry += 1) {
-    const sy = y0 + ry;
-    for (let rx = 0; rx < rw; rx += 1) {
-      const p = ry * rw + rx;
-      if (fixed[p]) continue;
-      const srcI = (sy * width + (x0 + rx)) * 4;
-      const i = p * 3;
-      out[srcI] = clampInt(Math.round(prev[i]), 0, 255);
-      out[srcI + 1] = clampInt(Math.round(prev[i + 1]), 0, 255);
-      out[srcI + 2] = clampInt(Math.round(prev[i + 2]), 0, 255);
-      out[srcI + 3] = 255;
+  const b = bounds(hole, width, height);
+  if (!b) return out;
+
+  // the hole's bounding box plus a ring of known pixels around it
+  const x0 = Math.max(0, b.x0 - 1), y0 = Math.max(0, b.y0 - 1);
+  const w = Math.min(width - 1, b.x1 + 1) - x0 + 1;
+  const h = Math.min(height - 1, b.y1 + 1) - y0 + 1;
+  const val = new Float32Array(w * h * 3);
+  const known = new Uint8Array(w * h);
+  for (let ry = 0, p = 0; ry < h; ry += 1) {
+    for (let rx = 0; rx < w; rx += 1, p += 1) {
+      const i = ((y0 + ry) * width + x0 + rx) * 4;
+      val.set(image.subarray(i, i + 3), p * 3);
+      known[p] = hole[(y0 + ry) * width + x0 + rx] ? 0 : 1;
     }
   }
 
+  const neighbours = (p, fn) => {
+    const rx = p % w, ry = (p - rx) / w;
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const nx = rx + dx, ny = ry + dy;
+        if ((dx || dy) && nx >= 0 && nx < w && ny >= 0 && ny < h) fn(ny * w + nx);
+      }
+    }
+  };
+
+  // onion peel: each ring takes the mean of the pixels already known
+  const order = [];
+  const queued = new Uint8Array(w * h);
+  const enqueue = (list, p) => {
+    if (known[p] || queued[p]) return;
+    queued[p] = 1;
+    list.push(p);
+  };
+  let ring = [];
+  for (let p = 0; p < known.length; p += 1) {
+    if (known[p]) neighbours(p, (n) => enqueue(ring, n));
+  }
+  while (ring.length) {
+    for (const p of ring) {
+      let r = 0, g = 0, bl = 0, n = 0;
+      neighbours(p, (q) => {
+        if (!known[q]) return;
+        r += val[q * 3];
+        g += val[q * 3 + 1];
+        bl += val[q * 3 + 2];
+        n += 1;
+      });
+      val[p * 3] = r / n;
+      val[p * 3 + 1] = g / n;
+      val[p * 3 + 2] = bl / n;
+    }
+    const next = [];
+    for (const p of ring) known[p] = 1;
+    for (const p of ring) {
+      order.push(p);
+      neighbours(p, (n) => enqueue(next, n));
+    }
+    ring = next;
+  }
+
+  // successive over-relaxation, hole pixels only
+  const deadline = performance.now() + budgetMs;
+  for (let s = 0; s < MAX_SWEEPS && performance.now() < deadline; s += 1) {
+    for (const p of order) {
+      const rx = p % w;
+      const up = p >= w ? p - w : p, down = p + w < w * h ? p + w : p;
+      const left = rx > 0 ? p - 1 : p, right = rx < w - 1 ? p + 1 : p;
+      for (let k = 0; k < 3; k += 1) {
+        const avg = (val[up * 3 + k] + val[down * 3 + k] + val[left * 3 + k] + val[right * 3 + k]) / 4;
+        val[p * 3 + k] += (avg - val[p * 3 + k]) * OMEGA;
+      }
+    }
+  }
+
+  for (const p of order) {
+    const rx = p % w, ry = (p - rx) / w;
+    const i = ((y0 + ry) * width + x0 + rx) * 4;
+    out[i] = val[p * 3];
+    out[i + 1] = val[p * 3 + 1];
+    out[i + 2] = val[p * 3 + 2];
+    out[i + 3] = 255;
+  }
   return out;
 }

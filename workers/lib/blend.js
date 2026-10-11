@@ -1,140 +1,65 @@
-// folds an inpainted result back into the original with a feathered edge.
-// runs for every algorithm
+// moving between the full-res image and the smaller one the fill runs on
 
-import { clampInt } from "./util.js";
-import { computeMaskBounds } from "./mask.js";
-
-function clamp01(v) {
-  if (v < 0) return 0;
-  if (v > 1) return 1;
-  return v;
-}
-
-function smoothstep(edge0, edge1, x) {
-  const t = clamp01((x - edge0) / (edge1 - edge0));
-  return t * t * (3 - 2 * t);
-}
-
-function extractAlphaRoi(mask, width, x0, y0, rw, rh) {
-  const alpha = new Uint16Array(rw * rh);
-  for (let ry = 0; ry < rh; ry += 1) {
-    const sy = y0 + ry;
-    const rowBase = (sy * width + x0) * 4;
-    const outBase = ry * rw;
-    for (let rx = 0; rx < rw; rx += 1) {
-      alpha[outBase + rx] = mask[rowBase + rx * 4 + 3];
-    }
-  }
-  return alpha;
-}
-
-function boxBlurUint16Separable(src, w, h, radius) {
-  if (radius <= 0) return src;
-  const windowSize = radius * 2 + 1;
-  const tmp = new Uint16Array(w * h);
-  const dst = new Uint16Array(w * h);
+// area-average downscale of `c` interleaved channels
+export function downscale(src, W, H, w, h, c) {
+  const out = new Uint8ClampedArray(w * h * c);
+  const acc = new Float64Array(c);
   for (let y = 0; y < h; y += 1) {
-    const row = y * w;
-    const first = src[row];
-    const last = src[row + w - 1];
-    let sum = first * radius;
-    for (let x = 0; x <= radius; x += 1) sum += src[row + x];
-
+    const sy0 = Math.floor((y * H) / h);
+    const sy1 = Math.max(sy0 + 1, Math.floor(((y + 1) * H) / h));
     for (let x = 0; x < w; x += 1) {
-      tmp[row + x] = Math.round(sum / windowSize);
-      const outX = x - radius;
-      const inX = x + radius + 1;
-      const outV = outX < 0 ? first : src[row + outX];
-      const inV = inX >= w ? last : src[row + inX];
-      sum += inV - outV;
+      const sx0 = Math.floor((x * W) / w);
+      const sx1 = Math.max(sx0 + 1, Math.floor(((x + 1) * W) / w));
+      acc.fill(0);
+      for (let sy = sy0; sy < sy1; sy += 1) {
+        for (let sx = sx0; sx < sx1; sx += 1) {
+          const i = (sy * W + sx) * c;
+          for (let k = 0; k < c; k += 1) acc[k] += src[i + k];
+        }
+      }
+      const n = (sy1 - sy0) * (sx1 - sx0);
+      const o = (y * w + x) * c;
+      for (let k = 0; k < c; k += 1) out[o + k] = acc[k] / n;
     }
   }
-  for (let x = 0; x < w; x += 1) {
-    const first = tmp[x];
-    const last = tmp[(h - 1) * w + x];
-    let sum = first * radius;
-    for (let y = 0; y <= radius; y += 1) sum += tmp[y * w + x];
-
-    for (let y = 0; y < h; y += 1) {
-      dst[y * w + x] = Math.round(sum / windowSize);
-      const outY = y - radius;
-      const inY = y + radius + 1;
-      const outV = outY < 0 ? first : tmp[outY * w + x];
-      const inV = inY >= h ? last : tmp[inY * w + x];
-      sum += inV - outV;
-    }
-  }
-
-  return dst;
+  return out;
 }
 
-export function blendNaturalEdgesRGBA({
-  original,
-  inpainted,
-  mask,
-  width,
-  height,
-  radius,
-  featherPx,
-}) {
-  const bounds = computeMaskBounds(mask, width, height);
-  if (!bounds) return inpainted;
-  const f =
-    typeof featherPx === "number"
-      ? clampInt(Math.round(featherPx), 1, 26)
-      : clampInt(Math.round(radius * 0.35), 2, 12);
-  const pad = f * 2;
-  const x0 = clampInt(bounds.minX - pad, 0, width - 1);
-  const y0 = clampInt(bounds.minY - pad, 0, height - 1);
-  const x1 = clampInt(bounds.maxX + pad, 0, width - 1);
-  const y1 = clampInt(bounds.maxY + pad, 0, height - 1);
-  const rw = x1 - x0 + 1;
-  const rh = y1 - y0 + 1;
-
-  const hardAlpha = extractAlphaRoi(mask, width, x0, y0, rw, rh);
-  const softAlpha = boxBlurUint16Separable(hardAlpha, rw, rh, f);
-
-  const inv255 = 1 / 255;
-  for (let ry = 0; ry < rh; ry += 1) {
-    const sy = y0 + ry;
-    const base = (sy * width + x0) * 4;
-    const pBase = ry * rw;
-    for (let rx = 0; rx < rw; rx += 1) {
-      const p = pBase + rx;
-      if (softAlpha[p] <= 0) continue;
-
-      const i = base + rx * 4;
-      if (hardAlpha[p] >= 255) {
-        inpainted[i + 3] = 255;
+// the patch `rect` of `original` with the w×h `fill` eased in by `weight`
+// (0-255 per patch pixel). the fill is sampled bilinearly, so outside the
+// weighted area the patch is the untouched full-res original
+export function compose(original, W, H, fill, w, h, rect, weight) {
+  const out = new Uint8ClampedArray(rect.w * rect.h * 4);
+  const sx = w / W;
+  const sy = h / H;
+  for (let ry = 0, p = 0; ry < rect.h; ry += 1) {
+    const fy = Math.min(h - 1, Math.max(0, (rect.y + ry + 0.5) * sy - 0.5));
+    const y0 = fy | 0;
+    const y1 = Math.min(y0 + 1, h - 1);
+    const ty = fy - y0;
+    for (let rx = 0; rx < rect.w; rx += 1, p += 1) {
+      const i = ((rect.y + ry) * W + rect.x + rx) * 4;
+      const o = p * 4;
+      const a = weight[p] / 255;
+      if (a === 0) {
+        out.set(original.subarray(i, i + 4), o);
         continue;
       }
-
-      const soft = softAlpha[p] * inv255;
-      const w = smoothstep(0.2, 0.95, soft);
-      if (w <= 0) continue;
-
-      const iw = 1 - w;
-      inpainted[i] = Math.round(inpainted[i] * w + original[i] * iw);
-      inpainted[i + 1] = Math.round(
-        inpainted[i + 1] * w + original[i + 1] * iw,
-      );
-      inpainted[i + 2] = Math.round(
-        inpainted[i + 2] * w + original[i + 2] * iw,
-      );
-      inpainted[i + 3] = 255;
+      const fx = Math.min(w - 1, Math.max(0, (rect.x + rx + 0.5) * sx - 0.5));
+      const x0 = fx | 0;
+      const x1 = Math.min(x0 + 1, w - 1);
+      const tx = fx - x0;
+      const i00 = (y0 * w + x0) * 4, i01 = (y0 * w + x1) * 4;
+      const i10 = (y1 * w + x0) * 4, i11 = (y1 * w + x1) * 4;
+      for (let k = 0; k < 3; k += 1) {
+        const top = fill[i00 + k] + (fill[i01 + k] - fill[i00 + k]) * tx;
+        const bottom = fill[i10 + k] + (fill[i11 + k] - fill[i10 + k]) * tx;
+        const v = top + (bottom - top) * ty;
+        out[o + k] = original[i + k] + (v - original[i + k]) * a;
+      }
+      // the fill is opaque, so a hole in a transparent area comes out opaque
+      out[o + 3] = original[i + 3] + (255 - original[i + 3]) * a;
     }
   }
-
-  return inpainted;
-}
-
-export function keepOriginalOutsideMaskRGBA({ original, inpainted, mask }) {
-  for (let i = 0; i < mask.length; i += 4) {
-    if (mask[i + 3] > 0) continue;
-    inpainted[i] = original[i];
-    inpainted[i + 1] = original[i + 1];
-    inpainted[i + 2] = original[i + 2];
-    inpainted[i + 3] = 255;
-  }
-  return inpainted;
+  return out;
 }
