@@ -1,6 +1,6 @@
 /* tokens first, then layout and components. dark is the default, light
    follows the os. editor.js reads --primary, --mask-base and --mask-shade
-   at draw time to build the mask hatch */
+   once, on first draw, to build the mask hatch */
 
 :root {
   color-scheme: dark;
@@ -20,7 +20,7 @@
   --text-muted: #8d94a6;
   --text-faint: #5f6678;
 
-  /* the shape preview in editor.js hardcodes this as rgba(84,162,255,…) */
+  /* also the mask hatch and shape preview colour in editor.js */
   --primary: #54a2ff;
   --primary-hover: #78b6ff;
   --primary-soft: rgb(84 162 255 / .15);
@@ -346,10 +346,7 @@ kbd {
   font-size: 12px;
 }
 
-/* canvas. editor.js sizes the stack to the container minus 40px a side, so
-   the scroll padding has to match that */
-
-.canvas-container { position: absolute; inset: 0; }
+/* canvas. editor.js fits the image inside the scroll padding */
 
 .canvas-scroll {
   position: absolute;
@@ -391,9 +388,8 @@ kbd {
   touch-action: none;
 }
 
-/* editor.js toggles display and moves it with transform from the top left */
+/* editor.js toggles hidden and moves it with transform from the top left */
 .brush-cursor {
-  display: none;
   position: absolute;
   top: 0;
   left: 0;
@@ -548,27 +544,23 @@ kbd {
 
 /* confirm dialog */
 
-.overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-  background: var(--backdrop);
-  -webkit-backdrop-filter: blur(3px);
-  backdrop-filter: blur(3px);
-  animation: fade-in .15s ease-out;
-}
-
 .dialog {
-  width: min(380px, 100%);
+  width: min(380px, calc(100% - 32px));
   padding: 20px;
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--surface);
+  color: var(--text);
   box-shadow: var(--shadow);
   animation: pop-in .18s ease-out;
+}
+
+/* older engines do not inherit custom properties into ::backdrop */
+.dialog::backdrop {
+  background: var(--backdrop, rgb(4 5 8 / .62));
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  animation: fade-in .15s ease-out;
 }
 
 .dialog-text { margin: 0 0 20px; font-size: 15px; }

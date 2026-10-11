@@ -6,9 +6,9 @@
   <meta name="color-scheme" content="dark light">
   <meta name="description" content="Remove watermarks and objects from images with MI-GAN and classical inpainting, running entirely in your browser.">
   <title>Slug · Watermark remover</title>
-  <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/color.css">
-  <script type="module" src="/app/main.js"></script>
+  <link rel="icon" href="favicon.ico">
+  <link rel="stylesheet" href="color.css">
+  <script type="module" src="app/main.js"></script>
 </head>
 <body>
   <!-- icon sprite, referenced with <use href="#i-name"> -->
@@ -29,18 +29,18 @@
 
   <header class="topbar">
     <div class="brand">
-      <img src="/favicon.ico" alt="" width="24" height="24">
+      <img src="favicon.ico" alt="" width="24" height="24">
       <span class="brand-name">Slug</span>
       <span class="brand-tag">watermark remover</span>
     </div>
 
     <div class="mode-switch" role="group" aria-label="Removal mode">
-      <button type="button" class="btn-mode active" data-mode="standard" title="Instant. OpenCV Telea, PatchMatch or a harmonic fill">Standard</button>
+      <button type="button" class="btn-mode" data-mode="standard" title="Instant. OpenCV Telea inpainting">Standard</button>
       <button type="button" class="btn-mode" data-mode="pro" title="Slower, better on texture. MI-GAN (~28MB model)">Pro</button>
     </div>
 
     <div class="topbar-actions">
-      <button type="button" class="btn btn-download" title="Download PNG" disabled>
+      <button type="button" id="downloadBtn" class="btn btn-download" title="Download PNG" disabled>
         <svg class="icon"><use href="#i-download"/></svg>
         <span class="btn-label">Download</span>
       </button>
@@ -70,15 +70,13 @@
       </span>
     </button>
 
-    <div id="canvasContainer" class="canvas-container" hidden>
-      <div id="canvasScroll" class="canvas-scroll">
-        <div class="canvas-stack">
-          <canvas id="imageCanvas"></canvas>
-          <canvas id="previewCanvas" class="layer"></canvas>
-          <canvas id="shapeCanvas" class="layer"></canvas>
-          <canvas id="maskCanvas" class="layer layer-input"></canvas>
-          <div id="brushCursor" class="brush-cursor"></div>
-        </div>
+    <div id="canvasScroll" class="canvas-scroll" hidden>
+      <div class="canvas-stack">
+        <canvas id="imageCanvas"></canvas>
+        <canvas id="previewCanvas" class="layer"></canvas>
+        <canvas id="shapeCanvas" class="layer"></canvas>
+        <canvas id="maskCanvas" class="layer layer-input"></canvas>
+        <div id="brushCursor" class="brush-cursor" hidden></div>
       </div>
     </div>
 
@@ -96,7 +94,7 @@
 
   <footer id="toolbarBottom" class="toolbar" hidden>
     <div class="toolbar-group" role="group" aria-label="Selection tool">
-      <button type="button" class="btn btn-icon btn-ghost tool-active" data-tool="brush" title="Brush (B)" aria-label="Brush">
+      <button type="button" class="btn btn-icon btn-ghost" data-tool="brush" title="Brush (B)" aria-label="Brush">
         <svg class="icon"><use href="#i-brush"/></svg>
       </button>
       <button type="button" class="btn btn-icon btn-ghost" data-tool="rect" title="Rectangle (R)" aria-label="Rectangle">
@@ -150,14 +148,14 @@
   <!-- outside #landing: a click bubbling from here would reopen the picker -->
   <input type="file" id="fileInput" accept="image/*" hidden>
 
-  <div id="confirmOverlay" class="overlay" hidden>
-    <div class="dialog" role="alertdialog" aria-modal="true" aria-label="Confirm" aria-describedby="confirmText">
+  <dialog id="confirmDialog" class="dialog" role="alertdialog" aria-label="Confirm" aria-describedby="confirmText">
+    <form method="dialog">
       <p id="confirmText" class="dialog-text"></p>
       <div class="dialog-actions">
-        <button type="button" id="confirmCancel" class="btn">Cancel</button>
-        <button type="button" id="confirmOk" class="btn btn-primary">Continue</button>
+        <button id="confirmCancel" class="btn" value="cancel">Cancel</button>
+        <button id="confirmOk" class="btn btn-primary" value="ok" autofocus>Continue</button>
       </div>
-    </div>
-  </div>
+    </form>
+  </dialog>
 </body>
 </html>
