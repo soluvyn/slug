@@ -1,286 +1,263 @@
-import { qs, qsa, lsGet, lsSet } from './utils.js';
-import { createStore } from './state.js';
-import { inpaintJob } from './inpaint.js';
-import { Editor } from './editor.js';
+import { createEditor } from "./editor.js";
+import { createHistory } from "./history.js";
+import { inpaint, warmUpPro } from "./inpaint.js";
 
-const MODEL_URL='/migan.onnx';
-const TOOL_KEYS={b:'brush',r:'rect',e:'ellipse'};
+const $ = (id) => document.getElementById(id);
+const TOOL_KEYS = { b: "brush", r: "rect", e: "ellipse" };
 
-function initApp(){
-  const editor=Editor();
-  const store=createStore(editor);
-  const fileInput=qs('#fileInput');
-  const landing=qs('#landing');
-  const canvasContainer=qs('#canvasContainer');
-  const toolbarBottom=qs('#toolbarBottom');
-  const spinner=qs('#spinner');
-  const toastEl=qs('#toast');
-  const toastText=qs('#toastText');
-  const confirmOverlay=qs('#confirmOverlay');
-  const confirmText=qs('#confirmText');
-  const confirmOk=qs('#confirmOk');
-  const confirmCancel=qs('#confirmCancel');
-  const brushSlider=qs('#brushSlider');
-  const brushDot=qs('#brushDot');
-  const zoomLabel=qs('#zoomLabel');
-  const undoBtn=qs('#undoBtn');
-  const redoBtn=qs('#redoBtn');
-  const clearBtn=qs('#clearBtn');
-  const removeBtn=qs('#removeBtn');
-  const downloadBtn=qs('.btn-download');
-  const closeBtn=qs('#closeBtn');
-  const toolButtons=qsa('[data-tool]');
-  const modeButtons=qsa('.btn-mode');
+const landing = $("landing");
+const fileInput = $("fileInput");
+const canvasScroll = $("canvasScroll");
+const toolbar = $("toolbarBottom");
+const spinner = $("spinner");
+const toastEl = $("toast");
+const toastText = $("toastText");
+const dialog = $("confirmDialog");
+const confirmText = $("confirmText");
+const brushSlider = $("brushSlider");
+const brushDot = $("brushDot");
+const zoomLabel = $("zoomLabel");
+const undoBtn = $("undoBtn");
+const redoBtn = $("redoBtn");
+const clearBtn = $("clearBtn");
+const removeBtn = $("removeBtn");
+const downloadBtn = $("downloadBtn");
+const closeBtn = $("closeBtn");
+const toolButtons = document.querySelectorAll("[data-tool]");
+const modeButtons = document.querySelectorAll("[data-mode]");
 
-  let prefetched=false;
-  let syncQueued=false;
-  let sourceName='';
+const history = createHistory();
+const editor = createEditor({ onChange: sync });
 
-  // exports are always PNG, so the name keeps the source stem for context but
-  // the extension has to match the actual bytes: photo.jpg -> photo-std.png
-  function exportName(source,quality){
-    const n=source||'';
-    const i=n.lastIndexOf('.');
-    const stem=i>0?n.slice(0,i):n||'image';
-    return stem+'-'+(quality==='pro'?'pro':'std')+'.png';
+let mode = "standard";
+let busy = false; // decoding an import or running a removal
+let job = 0; // bumped by import and close, so a late result is dropped
+let sourceName = "";
+let toastTimer = 0;
+
+// storage throws in some private modes; the preferences are optional
+function lsGet(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
   }
-
-  function setStatus(s){
-    store.state.status=s;
-    spinner.hidden=!(s==='loading'||s==='processing');
-    syncUI();
-  }
-
-  function syncUI(){
-    const hasMask=editor.ready&&editor.hasMask();
-    const busy=store.isBusy();
-    undoBtn.disabled=!store.canUndo()||busy;
-    redoBtn.disabled=!store.canRedo()||busy;
-    clearBtn.disabled=!hasMask||busy;
-    removeBtn.disabled=!hasMask||busy;
-    downloadBtn.disabled=!store.hasResult();
-    closeBtn.disabled=!editor.ready;
-    editor.setCursorVisible(editor.ready&&!busy);
-    brushSlider.value=editor.brushSize;
-    const d=Math.max(6,editor.brushSize/4);
-    brushDot.style.width=d+'px';brushDot.style.height=d+'px';
-  }
-
-  // mask changes fire on every pointermove, so collapse them to one sync per frame
-  function queueSyncUI(){
-    if(syncQueued)return;
-    syncQueued=true;
-    requestAnimationFrame(()=>{syncQueued=false;syncUI()});
-  }
-
-  function setTool(tool){
-    editor.tool=tool;
-    toolButtons.forEach((b)=>b.classList.toggle('tool-active',b.dataset.tool===tool));
-    syncUI();
-  }
-
-  function updateZoomLabel(){
-    zoomLabel.textContent=Math.round(editor.zoom*100)+'%';
-  }
-
-  function setMode(next){
-    store.state.mode=next;
-    modeButtons.forEach((b)=>b.classList.toggle('active',b.dataset.mode===next));
-    lsSet('proMode',next);
-    // first switch to pro with only a standard result on screen: run it now
-    if(next==='pro'&&editor.ready&&!store.state.proResult&&store.state.stdResult)doRemove('pro');
-    syncUI();
-  }
-
-  async function doImport(file){
-    if(store.hasResult()&&store.state.status==='ready'){
-      const ok=await askConfirm('Unsaved changes will be lost. Import anyway?');
-      if(!ok)return;
-    }
-    store.reset();
-    sourceName=file.name||'';
-    landing.hidden=true;
-    canvasContainer.hidden=false;
-    toolbarBottom.hidden=false;
-    setStatus('loading');
-    try{
-      await editor.loadImage(file);
-      setStatus('ready');
-      editor.clearMask();
-    }catch{
-      setStatus('idle');
-    }
-  }
-
-  function stepHistory(dir){
-    if(!store[dir]())return;
-    updateZoomLabel();
-    syncUI();
-  }
-
-  async function doRemove(quality){
-    if(!editor.ready||!editor.hasMask()||store.isBusy())return;
-    store.pushUndo();
-    setStatus('processing');
-    const q=quality||store.state.mode;
-    const radius=editor.brushSize/2;
-    try{
-      const result=await inpaintJob({
-        imageData:editor.getImageData(),
-        maskData:editor.getMaskData(),
-        width:editor.width,
-        height:editor.height,
-        radius,
-        feather:Math.max(2,Math.round(radius*0.3)),
-        quality:q
-      });
-      if(!result.ok)throw new Error(result.error||'Inpainting failed');
-      const data=new ImageData(new Uint8ClampedArray(result.image),result.width,result.height);
-      editor.setImageData(data);
-      editor.clearMask();
-      store.commitResult(data,q);
-      setStatus('ready');
-    }catch(err){
-      // never swallow this: a failed removal used to revert silently, which
-      // looked exactly like the button doing nothing
-      console.error('[remove] failed:',err);
-      toast(err&&err.message?err.message:'Removal failed');
-      setStatus('ready');
-    }
-  }
-
-  let toastTimer=null;
-  function toast(msg){
-    toastText.textContent=msg;
-    toastEl.hidden=false;
-    clearTimeout(toastTimer);
-    toastTimer=setTimeout(()=>{toastEl.hidden=true},6000);
-  }
-
-  // the promise is only settled from here, so the dialog must be dismissable:
-  // focus in, tab trapped, escape cancels, focus back to the opener
-  function askConfirm(msg){
-    return new Promise((res)=>{
-      const opener=document.activeElement;
-      let done=false;
-      function settle(v){
-        if(done)return;
-        done=true;
-        confirmOverlay.hidden=true;
-        document.removeEventListener('keydown',onKey,true);
-        if(opener&&opener.focus)opener.focus();
-        res(v);
-      }
-      function onKey(e){
-        if(e.key==='Escape'){e.preventDefault();settle(false);return}
-        if(e.key!=='Tab')return;
-        // two buttons, so wrap between them instead of escaping the dialog
-        const first=confirmCancel,last=confirmOk;
-        if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus()}
-        else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}
-      }
-      confirmText.textContent=msg;
-      confirmOverlay.hidden=false;
-      confirmOk.onclick=()=>settle(true);
-      confirmCancel.onclick=()=>settle(false);
-      document.addEventListener('keydown',onKey,true);
-      confirmOk.focus();
-    });
-  }
-
-  // releases the decoded image and returns to the drop-in stage
-  function closeImage(){
-    if(!editor.ready)return;
-    store.reset();
-    editor.unload();
-    sourceName='';
-    landing.hidden=false;
-    canvasContainer.hidden=true;
-    toolbarBottom.hidden=true;
-    setStatus('idle');
-  }
-
-  function downloadResult(){
-    const out=store.exportable();
-    if(!out)return;
-    const data=out.data;
-    const name=exportName(sourceName,out.quality);
-    const c=document.createElement('canvas');
-    c.width=data.width;c.height=data.height;
-    c.getContext('2d').putImageData(data,0,0);
-    c.toBlob((blob)=>{
-      const url=URL.createObjectURL(blob);
-      const a=document.createElement('a');
-      a.href=url;a.download=name;
-      a.click();
-      URL.revokeObjectURL(url);
-    },'image/png');
-  }
-
-  // warms the http cache the migan worker later reads the 28MB model from
-  function prefetchModel(){
-    if(prefetched)return;
-    prefetched=true;
-    fetch(MODEL_URL).catch(()=>{});
-  }
-
-  // #landing spans the whole dotted stage (inset:0) so a click anywhere opens the
-  // picker, and goes display:none on import, which stops it firing mid-draw
-  landing.addEventListener('click',()=>fileInput.click());
-  fileInput.addEventListener('change',()=>{
-    if(fileInput.files&&fileInput.files[0]){doImport(fileInput.files[0]);fileInput.value=''}
-  });
-
-  document.addEventListener('dragover',(e)=>e.preventDefault());
-  document.addEventListener('drop',(e)=>{
-    e.preventDefault();
-    const file=e.dataTransfer?.files?.[0];
-    if(file&&file.type.startsWith('image/'))doImport(file);
-  });
-
-  undoBtn.addEventListener('click',()=>stepHistory('undo'));
-  redoBtn.addEventListener('click',()=>stepHistory('redo'));
-  clearBtn.addEventListener('click',()=>{if(editor.ready)editor.clearMask()});
-  removeBtn.addEventListener('click',()=>doRemove());
-
-  toolButtons.forEach((b)=>b.addEventListener('click',()=>setTool(b.dataset.tool)));
-  modeButtons.forEach((b)=>b.addEventListener('click',()=>setMode(b.dataset.mode)));
-
-  brushSlider.addEventListener('input',()=>{
-    editor.brushSize=Number(brushSlider.value);
-    syncUI();
-  });
-  brushSlider.addEventListener('change',()=>lsSet('brushSize',brushSlider.value));
-
-  qs('#zoomOutBtn').addEventListener('click',()=>{editor.setZoom(editor.zoom/1.25);updateZoomLabel();syncUI()});
-  qs('#zoomInBtn').addEventListener('click',()=>{editor.setZoom(editor.zoom*1.25);updateZoomLabel();syncUI()});
-  zoomLabel.addEventListener('click',()=>{editor.setZoom(1);updateZoomLabel();syncUI()});
-
-  document.addEventListener('keydown',(e)=>{
-    // only text entry should swallow shortcuts; the range slider must not
-    if(qs('input[type=text]:focus,input[type=number]:focus,input[type=search]:focus,textarea:focus'))return;
-    const k=e.key.toLowerCase();
-    if(e.ctrlKey||e.metaKey){
-      if(k!=='z')return;
-      e.preventDefault();
-      stepHistory(e.shiftKey?'redo':'undo');
-      return;
-    }
-    if(TOOL_KEYS[k])setTool(TOOL_KEYS[k]);
-  });
-
-  downloadBtn.addEventListener('click',downloadResult);
-  closeBtn.addEventListener('click',closeImage);
-
-  editor.onMaskChange(queueSyncUI);
-  editor.onReady=()=>{syncUI()};
-
-  document.addEventListener('pointerdown',prefetchModel,{once:true});
-  document.addEventListener('keydown',prefetchModel,{once:true});
-
-  const savedBrush=lsGet('brushSize',null);
-  if(savedBrush!==null){editor.brushSize=Number(savedBrush);brushSlider.value=savedBrush}
-  setMode(lsGet('proMode','standard')==='pro'?'pro':'standard');
+}
+function lsSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
 }
 
-document.addEventListener('DOMContentLoaded',initApp);
+function sync() {
+  const masked = editor.hasMask && !busy;
+  undoBtn.disabled = busy || !history.canUndo;
+  redoBtn.disabled = busy || !history.canRedo;
+  clearBtn.disabled = removeBtn.disabled = !masked;
+  downloadBtn.disabled = busy || history.quality === null;
+  closeBtn.disabled = !editor.ready;
+  spinner.hidden = !busy;
+  editor.setCursorVisible(editor.ready && !busy);
+  zoomLabel.textContent = Math.round(editor.zoom * 100) + "%";
+  brushDot.style.width = brushDot.style.height = Math.max(6, editor.brushSize / 4) + "px";
+  for (const b of toolButtons) {
+    b.classList.toggle("tool-active", b.dataset.tool === editor.tool);
+    b.setAttribute("aria-pressed", b.dataset.tool === editor.tool);
+  }
+  for (const b of modeButtons) {
+    b.classList.toggle("active", b.dataset.mode === mode);
+    b.setAttribute("aria-pressed", b.dataset.mode === mode);
+  }
+}
+
+function setBusy(v) {
+  busy = v;
+  sync();
+}
+
+function showStage(hasImage) {
+  landing.hidden = hasImage;
+  canvasScroll.hidden = !hasImage;
+  toolbar.hidden = !hasImage;
+}
+
+function toast(msg) {
+  toastText.textContent = msg;
+  toastEl.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (toastEl.hidden = true), 6000);
+}
+
+// the native modal handles focus, the tab trap and escape
+function askConfirm(msg) {
+  confirmText.textContent = msg;
+  dialog.returnValue = "";
+  dialog.showModal();
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "ok"), { once: true });
+  });
+}
+
+const confirmDiscard = (action) =>
+  history.quality === null || askConfirm(`Unsaved changes will be lost. ${action} anyway?`);
+
+// decoded before anything is torn down, so a bad file leaves the current image alone
+async function decode(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    if (!img.naturalWidth || !img.naturalHeight) throw new Error("no size");
+    return img;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function openFile(file) {
+  if (dialog.open || !(await confirmDiscard("Import"))) return;
+  const token = ++job;
+  setBusy(true);
+  try {
+    const img = await decode(file);
+    if (token !== job) return;
+    history.clear();
+    sourceName = file.name;
+    showStage(true);
+    editor.load(img);
+    if (mode === "pro") warmUpPro();
+  } catch {
+    if (token === job) toast(`Couldn't open ${file.name || "that file"} as an image`);
+  } finally {
+    if (token === job) setBusy(false);
+  }
+}
+
+async function closeImage() {
+  if (!editor.ready || !(await confirmDiscard("Close"))) return;
+  job++;
+  history.clear();
+  editor.unload();
+  sourceName = "";
+  showStage(false);
+  setBusy(false);
+}
+
+async function remove() {
+  if (busy || !editor.hasMask) return;
+  const token = job;
+  const quality = mode;
+  setBusy(true);
+  try {
+    const patch = await inpaint({
+      image: editor.imageData(),
+      mask: editor.maskData(),
+      radius: editor.brushSize / 2,
+      quality,
+    });
+    if (token !== job) return;
+    if (patch) {
+      const { x, y, width, height } = patch;
+      const after = new ImageData(patch.data, width, height);
+      history.push({ x, y, before: editor.read(x, y, width, height), after, quality });
+      editor.write(after, x, y);
+    }
+    editor.clearMask();
+  } catch (err) {
+    if (token !== job) return;
+    // a failure that only reverted looked exactly like the button doing nothing
+    console.error("[remove] failed:", err);
+    toast(err.message || "Removal failed");
+  } finally {
+    if (token === job) setBusy(false);
+  }
+}
+
+function step(dir) {
+  if (busy) return;
+  const e = dir === "undo" ? history.undo() : history.redo();
+  if (!e) return;
+  editor.write(dir === "undo" ? e.before : e.after, e.x, e.y);
+  sync();
+}
+
+// always png, so photo.jpg exports as photo-std.png
+async function download() {
+  const blob = await editor.toBlob();
+  if (!blob) return toast("Couldn't export the image");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${sourceName.replace(/\.[^.]*$/, "") || "image"}-${history.quality === "pro" ? "pro" : "std"}.png`;
+  a.click();
+  // revoking in the same task can cancel the download in some browsers
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+}
+
+function setMode(next) {
+  mode = next;
+  lsSet("proMode", next);
+  if (mode === "pro" && editor.ready) warmUpPro();
+  sync();
+}
+
+function setTool(tool) {
+  editor.tool = tool;
+  sync();
+}
+
+function zoomTo(z) {
+  editor.setZoom(z);
+  sync();
+}
+
+// #landing covers the whole stage, so a click anywhere on it opens the picker
+landing.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files[0];
+  fileInput.value = ""; // so picking the same file again still fires
+  if (file) openFile(file);
+});
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer?.files[0];
+  if (file) openFile(file);
+});
+
+undoBtn.addEventListener("click", () => step("undo"));
+redoBtn.addEventListener("click", () => step("redo"));
+clearBtn.addEventListener("click", () => editor.clearMask());
+removeBtn.addEventListener("click", remove);
+downloadBtn.addEventListener("click", download);
+closeBtn.addEventListener("click", closeImage);
+for (const b of toolButtons) b.addEventListener("click", () => setTool(b.dataset.tool));
+for (const b of modeButtons) b.addEventListener("click", () => setMode(b.dataset.mode));
+$("zoomOutBtn").addEventListener("click", () => zoomTo(editor.zoom / 1.25));
+$("zoomInBtn").addEventListener("click", () => zoomTo(editor.zoom * 1.25));
+zoomLabel.addEventListener("click", () => zoomTo(1));
+
+brushSlider.addEventListener("input", () => {
+  editor.brushSize = Number(brushSlider.value);
+  sync();
+});
+brushSlider.addEventListener("change", () => lsSet("brushSize", brushSlider.value));
+
+document.addEventListener("keydown", (e) => {
+  if (dialog.open || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (e.ctrlKey || e.metaKey) {
+    if (k !== "z") return;
+    e.preventDefault();
+    step(e.shiftKey ? "redo" : "undo");
+  } else if (TOOL_KEYS[k]) {
+    setTool(TOOL_KEYS[k]);
+  }
+});
+
+const savedBrush = Number(lsGet("brushSize"));
+if (savedBrush >= Number(brushSlider.min) && savedBrush <= Number(brushSlider.max)) {
+  editor.brushSize = savedBrush;
+}
+brushSlider.value = editor.brushSize;
+setMode(lsGet("proMode") === "pro" ? "pro" : "standard");
